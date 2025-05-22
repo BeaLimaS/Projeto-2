@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "baseDados"
+		},
+		{
+			"name": "rfidTeste",
+			"path": "../Testes/rfidTeste"
+		}
+	],
+	"settings": {}
+}
