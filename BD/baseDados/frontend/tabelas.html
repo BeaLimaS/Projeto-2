@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tabelas</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <nav>
+        <ul>
+            <li><a href="index.html">Página Inicial</a></li>
+            <li><a href="graficosHoras.html">Gráficos Horas</a></li>
+            <li><a href="graficosPessoais.html">Gráficos Pessoais</a></li>
+            <li><a href="graficosCarregadores.html">Gráficos por carregador</a></li>
+            <li><a href="graficosAtuais.html">Gráficos Totais</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <h1>Tabela com todos os dados de todos os carregamentos</h1>
+        <p>Os dados apresentados são a partir de dia 01-01-2022. Alguns dados podem estar em falta!</p>
+    
+        <table>
+            <thead>
+                <tr>
+                    <th>Início</th>
+                    <th>Fim</th>
+                    <th>Energia (kWh)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Dados da tabela serão inseridos aqui -->
+            </tbody>
+        </table>
+    
+<div class="pagination">
+    <button id="btn-anterior">Anterior</button>
+    <!--<span class="page-number" id="numero-pagina">Página 1</span> -->
+    <button id="btn-proximo">Próximo</button>
+</div>
+
+    </main>
+    <script src="js/script.js"></script>
+</body>
+</html>

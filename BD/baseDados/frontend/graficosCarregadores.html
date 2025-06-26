@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gráficos por Carregador</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="js/graficosCarregadores.js"></script> <!-- Cria um novo JS para esta página -->
+</head>
+<body>
+    <nav>
+        <ul>
+            <li><a href="index.html">Página Inicial</a></li>
+            <li><a href="graficosHoras.html">Gráficos Horas</a></li>
+            <li><a href="graficosAtuais.html">Gráficos Totais</a></li>
+            <li><a href="graficosPessoais.html">Gráficos Pessoais</a></li>
+            <li><a href="tabelas.html">Tabelas</a></li>
+        </ul>
+    </nav>
+    <main>
+        <h1>Gráficos por Carregador</h1>
+
+        <div style="position: relative; width: 100%; height: 20px; margin-top: 20px;">
+            <div style="position: absolute; top: 0; left: 10px; right: 10px; display: flex; align-items: flex-start; gap: 10px;">
+        <label for="pesquisaIdCarregador">Procurar Carregador:</label>
+        <input type="text" id="pesquisaIdCarregador" oninput="filtrarOpcoes()" placeholder="Digite o ID da tag...">
+        </div>
+    </div>
+
+        <div style="position: relative; width: 100%; height: 20px; margin-top: 20px;">
+            <div style="position: absolute; top: 0; left: 10px; right: 10px; display: flex; align-items: flex-start; gap: 10px;">
+              <label for="selecionadorIdCarregador" style="margin: 0; padding-top: 5px;">Selecionar Carregador:</label>
+              <select id="selecionadorIdCarregador" style="position: relative; z-index: 9999;" onchange="atualizarGraficoSelecionado()" onclick="fecharSelecionador()" size="1">
+                <option value="">-- Selecione um Carregador --</option>
+              </select>
+            </div>
+          </div>
+          
+          
+          
+        <div id="graficoCarregadorSelecionada" style="margin-top: 20px;"></div>
+    </main>
+    
+</body>
+</html>
