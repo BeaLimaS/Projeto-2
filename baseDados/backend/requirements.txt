@@ -1,5 +1,6 @@
-flask==2.0.1
-pymongo==4.0.1
-paho-mqtt==1.6.1
-gunicorn==20.1.0
-python-dotenv==0.19.2
+flask
+pymongo
+paho-mqtt
+gunicorn
+python-dotenv
+requests
