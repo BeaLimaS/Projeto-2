@@ -14,7 +14,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configurações do MongoDB
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017/"))
 db = client["CarregadoresDB"]
 sessoes_carga = db["sessoes_carga"]
 colecao_teste = db["sessoes_carga_teste"]
