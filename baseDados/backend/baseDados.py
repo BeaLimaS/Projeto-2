@@ -5,22 +5,169 @@ import requests
 import urllib.parse
 import time
 from datetime import datetime, timedelta
+import paho.mqtt.client as mqtt
+import json
+import os
+import ssl
 
 app = Flask(__name__)
-CORS(app)  # Permite que o frontend aceda à API
+CORS(app)
 
-# Conectar ao MongoDB (local)
+# Configurações do MongoDB
 client = MongoClient("mongodb://localhost:27017/")
 db = client["CarregadoresDB"]
 sessoes_carga = db["sessoes_carga"]
-
-#para os testes com os dados dummy do RFID
 colecao_teste = db["sessoes_carga_teste"]
 
+# Configuração do JSON
+JSON_FILE = "energy_data.json"
+if not os.path.exists(JSON_FILE):
+    with open(JSON_FILE, 'w') as f:
+        json.dump({"energy_data": []}, f)
 
-print("Base de dados conectada com sucesso!")
+# Configuração MQTT para HiveMQ Cloud
+MQTT_BROKER = "c4a0e4602d804089ad70745f4aa640d3.s1.eu.hivemq.cloud"
+MQTT_PORT = 8883
+MQTT_TOPIC_POWER = "Esp32/potencia"
+MQTT_USERNAME = "seu_usuario"  # Substitua pelo seu username
+MQTT_PASSWORD = "sua_senha"    # Substitua pela sua senha
 
-# ========================== Teste de inserção de dados dummy ==========================
+# ==================== MQTT Client ====================
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+
+def on_mqtt_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
+        print("Conectado com sucesso ao broker MQTT")
+        client.subscribe(MQTT_TOPIC_POWER)
+    else:
+        print(f"Falha na conexão. Código: {reason_code}")
+
+def on_mqtt_message(client, userdata, message):
+    try:
+        print(f"Mensagem recebida no tópico {message.topic}: {message.payload.decode()}")
+        
+        if message.topic == MQTT_TOPIC_POWER:
+            power_value = float(message.payload.decode())
+            timestamp = datetime.utcnow().isoformat() + "Z"
+            
+            # Documento para MongoDB
+            mongo_doc = {
+                "begin": timestamp,
+                "energyDelivered": power_value,
+                "evseId": "1",
+                "end": timestamp,
+                "siteId": "63722d1ffaf87162cc48fe46"
+            }
+            
+            # Inserir no MongoDB
+            sessoes_carga.insert_one(mongo_doc)
+            
+            # Atualizar JSON
+            with open(JSON_FILE, 'r+') as f:
+                data = json.load(f)
+                data["energy_data"].append({
+                    "timestamp": timestamp,
+                    "power": power_value,
+                    "evseId": "1"
+                })
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            
+            print("Dados armazenados no MongoDB e JSON")
+            
+    except Exception as e:
+        print(f"Erro ao processar mensagem MQTT: {str(e)}")
+
+def setup_mqtt():
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_message = on_mqtt_message
+    
+    # Configura SSL/TLS
+    mqtt_client.tls_set(tls_version=ssl.PROTOCOL_TLS)
+    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_start()
+    except Exception as e:
+        print(f"Erro na conexão MQTT: {str(e)}")
+
+# ==================== Funções da API ====================
+def get_last_entry_date():
+    last_entry = sessoes_carga.find_one(sort=[("begin", -1)])
+    if last_entry:
+        return last_entry["begin"]
+    return "2022-01-01T00:00:00.000Z"
+
+def atualizar_dados():
+    try:
+        last_entry_date = get_last_entry_date()
+        filtro = {
+            "where": {
+                "begin": {"between": ["2022-01-01T00:00:00.000Z", last_entry_date]},
+                "siteId": "63722d1ffaf87162cc48fe46"
+            },
+            "order": "begin DESC",
+            "limit": 1000
+        }
+
+        filtro_codificado = urllib.parse.quote(str(filtro).replace("'", '"'))
+        url = f"https://dev-hgp-sgi.streamline.pt/api/transactions?filter={filtro_codificado}"
+
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        novos_dados = response.json()
+
+        if novos_dados:
+            # Processar e armazenar dados
+            dados_processados = []
+            for dado in novos_dados:
+                if not all(k in dado for k in ["begin", "energyDelivered"]):
+                    continue
+                
+                dado["evseId"] = "1"
+                if "end" not in dado:
+                    dado["end"] = dado["begin"]
+                
+                dados_processados.append(dado)
+            
+            # Inserir no MongoDB
+            if dados_processados:
+                sessoes_carga.insert_many(dados_processados)
+            
+            # Atualizar JSON
+            json_data = []
+            for doc in dados_processados:
+                json_data.append({
+                    "timestamp": doc["begin"],
+                    "power": doc["energyDelivered"],
+                    "evseId": doc["evseId"]
+                })
+            
+            with open(JSON_FILE, 'r+') as f:
+                data = json.load(f)
+                data["energy_data"].extend(json_data)
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            
+            print(f"Dados atualizados: {len(dados_processados)} registros")
+        else:
+            print("Nenhum novo dado encontrado na API")
+
+    except Exception as e:
+        print(f"Erro ao atualizar dados: {str(e)}")
+
+def atualizar_periodicamente():
+    while True:
+        atualizar_dados()
+        time.sleep(1000)
+
+# ==================== Rotas Flask ====================
+@app.route('/')
+def home():
+    return render_template('index.html')
 
 @app.route('/teste-rfid', methods=['POST'])
 def testar_rfid():
@@ -35,57 +182,8 @@ def testar_rfid():
         "data_hora": datetime.now()
     }
 
-    # Inserir na coleção de testes
-    db["sessoes_carga_teste"].insert_one(dados)
-
+    colecao_teste.insert_one(dados)
     return jsonify({"status": "Teste registado"}), 200
-
-
-
-
-# ========================== Request dos dados ==========================
-
-def get_last_entry_date():
-    """Retorna a data da última entrada na coleção sessoes_carga"""
-    last_entry = sessoes_carga.find_one(sort=[("begin", -1)])
-    if last_entry:
-        return last_entry["begin"]
-    return "2026-03-23T23:59:59.999Z"  # Data padrão se não houver entradas
-
-def atualizar_dados():
-    """Busca novos dados da API e insere no MongoDB"""
-    last_entry_date = get_last_entry_date()
-    filtro = {
-        "where": {
-            "begin": {
-                "between": ["2022-01-01T00:00:00.000Z", last_entry_date]
-            },
-            "siteId": "63722d1ffaf87162cc48fe46"
-        },
-        "order": "begin+desc"
-    }
-
-    filtro_codificado = urllib.parse.quote(str(filtro).replace("'", '"'))
-    url = f"https://dev-hgp-sgi.streamline.pt/api/transactions?filter={filtro_codificado}"
-
-    response = requests.get(url)
-    if response.status_code == 200:
-        novos_dados = response.json()
-        print(novos_dados)  # Verificação da resposta da API
-        if novos_dados:  # Evita inserir se a resposta estiver vazia
-            for dado in novos_dados:
-                print(dado)  # Verificação dos dados antes da inserção
-                if not sessoes_carga.find_one({"begin": dado["begin"]}):
-                    sessoes_carga.insert_one(dado)
-            print("Base de dados atualizada com novos dados!")
-    else:
-        print(f"Erro ao buscar dados: {response.status_code} - {response.text}")
-
-# ========================== Rota para a página principal ==========================
-
-@app.route('/')
-def home():
-    return render_template('index.html')
 
 @app.route('/dados')
 def get_all_data():
@@ -111,9 +209,9 @@ def get_all_data():
             },
             {
                 "$group": {
-                    "_id": "$beginDate",  # Ou podes usar outra lógica se quiseres agrupar de outra forma
+                    "_id": "$beginDate",
                     "totalEnergy": {"$sum": "$energyDelivered"},
-                    "datasFim": { "$first": "$endDate" },  # Opcional: guarda o primeiro fim associado
+                    "datasFim": { "$first": "$endDate" },
                     "carregador": { "$first": "$evseId" },
                     "registos": {"$sum": 1}
                 }
@@ -132,30 +230,22 @@ def get_all_data():
             }
         ]
 
-        resultados = list(db.sessoes_carga.aggregate(pipeline))
-
-        # Extrair os arrays para o front-end
-        labelsInicio = [doc["dataInicio"] for doc in resultados]
-        labelsFim = [doc["dataFim"] for doc in resultados]
-        evse = [doc["carregador"] for doc in resultados]
-        values = [doc["energia"] for doc in resultados]
+        resultados = list(sessoes_carga.aggregate(pipeline))
 
         return jsonify({
-            "datasInicio": labelsInicio,
-            "datasFim": labelsFim,
-            "evse": evse,
-            "energias": values
+            "datasInicio": [doc["dataInicio"] for doc in resultados],
+            "datasFim": [doc["dataFim"] for doc in resultados],
+            "evse": [doc["carregador"] for doc in resultados],
+            "energias": [doc["energia"] for doc in resultados]
         })
 
     except Exception as e:
         print(f"Erro na rota /dados: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ========================== Rota para o gráfico das pessoas ==========================
 @app.route('/dados/consumo-por-pessoa')
 def consumo_por_pessoa():
     try:
-        # Pipeline de agregação para agrupar por userId e data
         pipeline = [
             {
                 "$group": {
@@ -163,17 +253,17 @@ def consumo_por_pessoa():
                         "data": {
                             "$dateToString": {
                                 "format": "%Y-%m-%d",
-                                "date": {"$toDate": "$begin"}  # Converte string para Date
+                                "date": {"$toDate": "$begin"}
                             }
                         },
-                        "idTag": "$idTag"  # Agrupa por userId (pessoa)
+                        "idTag": "$idTag"
                     },
                     "totalEnergy": {"$sum": "$energyDelivered"},
                     "registos": {"$sum": 1}
                 }
             },
             {
-                "$sort": {"_id.data": 1}  # Ordena por data ASC
+                "$sort": {"_id.data": 1}
             },
             {
                 "$project": {
@@ -185,9 +275,8 @@ def consumo_por_pessoa():
             }
         ]
 
-        resultados = list(db.sessoes_carga.aggregate(pipeline))
+        resultados = list(sessoes_carga.aggregate(pipeline))
 
-        # Agrupar os dados por userId
         usuarios = {}
         for doc in resultados:
             if doc['idTag'] not in usuarios:
@@ -197,19 +286,14 @@ def consumo_por_pessoa():
                 'energia': doc['energia']
             })
 
-        # Retorna os dados agrupados por pessoa
         return jsonify(usuarios)
 
     except Exception as e:
         print(f"Erro na rota /dados/consumo-por-pessoa: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
-# ========================== Exemplo para os gráficos ==========================
-
 @app.route('/dados_grafico')
 def dados_grafico():
-    """Retorna os dados para os gráficos, agrupados por hora."""
     data_str = request.args.get('data')
     print(f"Data recebida: {data_str}")
     
@@ -217,18 +301,12 @@ def dados_grafico():
         return jsonify({"error": "Parâmetro 'data' é obrigatório"}), 400
 
     try:
-        # Converter a string para um objeto datetime
         data_inicio = datetime.strptime(data_str, '%Y-%m-%d')
         data_fim = data_inicio + timedelta(days=1)
-    except ValueError as e:
-        return jsonify({"error": f"Formato de data inválido: {str(e)}"}), 400
 
-    try:
-        # Converter datas para o formato ISO com Z (UTC)
         inicio_iso = data_inicio.isoformat() + "Z"
         fim_iso = data_fim.isoformat() + "Z"
 
-        # Query para filtrar por datas
         query = {
             "begin": {
                 "$gte": inicio_iso,
@@ -236,22 +314,19 @@ def dados_grafico():
             }
         }
 
-        # Buscar dados no MongoDB
         dados = list(sessoes_carga.find(query, {"_id": 0, "begin": 1, "energyDelivered": 1}))
 
-        # Agrupar por hora
-        valores_por_hora = {str(hora).zfill(2): 0 for hora in range(24)}  # Inicializa todas as horas com 0
+        valores_por_hora = {str(hora).zfill(2): 0 for hora in range(24)}
 
         for d in dados:
             try:
                 hora = datetime.fromisoformat(d["begin"].replace("Z", "")).hour
-                hora_str = str(hora).zfill(2)  # Formata como "00", "01", ..., "23"
+                hora_str = str(hora).zfill(2)
                 valores_por_hora[hora_str] += d.get("energyDelivered", 0)
             except KeyError as e:
-                print(f"Documento inválido: campo {str(e)} ausente. ID: {d.get('_id', 'desconhecido')}")
+                print(f"Documento inválido: campo {str(e)} ausente")
                 continue
 
-        # Preparar dados para resposta
         horas = [f"{h}h" for h in valores_por_hora.keys()]
         valores = list(valores_por_hora.values())
 
@@ -264,11 +339,9 @@ def dados_grafico():
         print(f"Erro interno: {str(e)}")
         return jsonify({"error": "Erro interno do servidor"}), 500
 
-# ========================== Rota para os dados por carregador ==========================
 @app.route('/dados/consumo-por-carregador')
 def consumo_por_carregador():
     try:
-        # Pipeline de agregação para agrupar por userId e data
         pipeline = [
             {
                 "$group": {
@@ -276,17 +349,17 @@ def consumo_por_carregador():
                         "data": {
                             "$dateToString": {
                                 "format": "%Y-%m-%d",
-                                "date": {"$toDate": "$begin"}  # Converte string para Date
+                                "date": {"$toDate": "$begin"}
                             }
                         },
-                        "idCarregador": "$evseId"  # Agrupa por userId (pessoa)
+                        "idCarregador": "$evseId"
                     },
                     "totalEnergy": {"$sum": "$energyDelivered"},
                     "registos": {"$sum": 1}
                 }
             },
             {
-                "$sort": {"_id.data": 1}  # Ordena por data ASC
+                "$sort": {"_id.data": 1}
             },
             {
                 "$project": {
@@ -298,38 +371,40 @@ def consumo_por_carregador():
             }
         ]
 
-        resultados = list(db.sessoes_carga.aggregate(pipeline))
+        resultados = list(sessoes_carga.aggregate(pipeline))
 
-        # Agrupar os dados por userId
-        usuarios = {}
+        carregadores = {}
         for doc in resultados:
-            if doc['idCarregador'] not in usuarios:
-                usuarios[doc['idCarregador']] = []
-            usuarios[doc['idCarregador']].append({
+            if doc['idCarregador'] not in carregadores:
+                carregadores[doc['idCarregador']] = []
+            carregadores[doc['idCarregador']].append({
                 'data': doc['data'],
                 'energia': doc['energia']
             })
 
-        # Retorna os dados agrupados por pessoa
-        return jsonify(usuarios)
+        return jsonify(carregadores)
 
     except Exception as e:
-        print(f"Erro na rota /dados/consumo-por-pessoa: {str(e)}")
+        print(f"Erro na rota /dados/consumo-por-carregador: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ========================== Loop para atualização automática ==========================
+@app.route('/dados/json')
+def get_json_data():
+    try:
+        with open(JSON_FILE, 'r') as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def atualizar_periodicamente():
-    """Atualiza os dados a cada 1000 segundos"""
-    while True:
-        atualizar_dados()
-        time.sleep(1000)
-
-# ========================== Execução Principal ==========================
+# ==================== Execução Principal ====================
 if __name__ == '__main__':
     from threading import Thread
-    # Iniciar a atualização automática dos dados em segundo plano
+    
+    # Iniciar MQTT com configurações para HiveMQ Cloud
+    setup_mqtt()
+    
+    # Iniciar atualização periódica em segundo plano
     Thread(target=atualizar_periodicamente, daemon=True).start()
     
-    # Iniciar o servidor Flask com reloader desativado para evitar conflitos com a thread
-    app.run(debug=True, use_reloader=False)
+    # Iniciar servidor Flask
+    app.run(debug=True, use_reloader=False, port=5000)
